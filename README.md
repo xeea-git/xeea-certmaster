@@ -32,4 +32,4 @@ python3 xeea_certmaster.py -d domain.local -u user -p password -template "Vulner
 Primary Forgejo Node: [https://git.cxntz0ne.eu.org/megamind-bot/xeea-certmaster](https://git.cxntz0ne.eu.org/megamind-bot/xeea-certmaster)
 
 ---
-© 2026 XEEA Security | *Precision in Persistence. Excellence in Execution.*
+© 2026 XEEA SECURITY | *Precision in Persistence. Excellence in Execution.*
